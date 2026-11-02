@@ -243,8 +243,11 @@ function viewCash(){
     const moveSum = mv.reduce((a, m) => a + m.amount, 0);
     const cashNow = (sh.opening || 0) + moveSum;
     const done = ss.filter(s => s.status === "DONE" && s.startedAt < nextOpen);
-    const income = done.reduce((a, s) => a + (Number(s.paidCash) || 0), 0);
-    const kaspi = done.reduce((a, s) => a + (Number(s.paidKaspi) || 0), 0);
+    const total = s => Number(s.paid) || Number(s.price) || 0;
+    const cashOf = s => Number(s.paidCash) || (s.payMethod === "CASH" ? total(s) : 0);
+    const kaspiOf = s => Number(s.paidKaspi) || (s.payMethod === "KASPI" ? total(s) : 0);
+    const income = done.reduce((a, s) => a + cashOf(s), 0);
+    const kaspi = done.reduce((a, s) => a + kaspiOf(s), 0);
     const box = (label, val, cls = "") => `<div class="stat ${cls}"><small>${label}</small><b>${val}</b></div>`;
     $("cashStats").innerHTML =
       box("Наличных в кассе" + (sh.closedAt ? " на закрытие" : " сейчас"), fmtMoney(cashNow) + " ₸", "main") +
