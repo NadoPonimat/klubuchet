@@ -231,6 +231,7 @@ function viewSessions(){
 /* ---------- Касса ---------- */
 function viewCash(){
   let shifts = [], selected = null, mv = [], ss = [], inner = [];
+  const dayStart = ms => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
   const stopInner = () => { inner.forEach(f => f()); inner = []; };
   subs.push(stopInner);
 
@@ -238,7 +239,7 @@ function viewCash(){
     const sh = shifts.find(s => String(s.dateEpochDay) === String(selected));
     if(!sh){ $("cashStats").innerHTML = ""; $("rowsM").innerHTML = ""; return; }
     const idx = shifts.indexOf(sh);
-    const nextOpen = idx > 0 ? shifts[idx - 1].openedAt : Infinity;
+    const nextOpen = idx > 0 ? dayStart(shifts[idx - 1].openedAt) : Infinity;
     const out = mv.filter(m => m.amount < 0).reduce((a, m) => a + m.amount, 0);
     const moveSum = mv.reduce((a, m) => a + m.amount, 0);
     const cashNow = (sh.opening || 0) + moveSum;
@@ -273,7 +274,7 @@ function viewCash(){
     if(!sh){ render(); return; }
     inner.push(onSnapshot(query(collection(db, "cash_movements"), where("shiftDay", "==", Number(sh.dateEpochDay))),
       snap => { mv = snap.docs.map(d => d.data()); render(); }, onErr($("emptyM"))));
-    inner.push(onSnapshot(query(collection(db, "sessions"), where("startedAt", ">=", sh.openedAt), orderBy("startedAt", "desc")),
+    inner.push(onSnapshot(query(collection(db, "sessions"), where("startedAt", ">=", dayStart(sh.openedAt)), orderBy("startedAt", "desc")),
       snap => { ss = snap.docs.map(d => d.data()); render(); }, onErr($("emptyM"))));
   }
 
