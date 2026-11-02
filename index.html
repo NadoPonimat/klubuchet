@@ -105,7 +105,7 @@
         <select id="shiftPick"></select>
       </div>
       <div class="stats" id="cashStats"></div>
-      <p class="note">Kaspi считается по сессиям со статусом «Завершена», начатым в рамках смены.</p>
+      <p class="note">Выручка, наличные и Kaspi считаются по завершённым сессиям смены, отменённые не входят. Деньги в кассе считаются по движениям.</p>
       <h2>Движения по кассе</h2>
       <div class="tablewrap">
         <table>
@@ -237,19 +237,22 @@ function viewCash(){
   function render(){
     const sh = shifts.find(s => String(s.dateEpochDay) === String(selected));
     if(!sh){ $("cashStats").innerHTML = ""; $("rowsM").innerHTML = ""; return; }
-    const end = sh.closedAt || Date.now();
-    const income = mv.filter(m => m.amount > 0).reduce((a, m) => a + m.amount, 0);
+    const idx = shifts.indexOf(sh);
+    const nextOpen = idx > 0 ? shifts[idx - 1].openedAt : Infinity;
     const out = mv.filter(m => m.amount < 0).reduce((a, m) => a + m.amount, 0);
-    const cashNow = (sh.opening || 0) + income + out;
-    const kaspi = ss.filter(s => s.status === "DONE" && s.startedAt <= end)
-                    .reduce((a, s) => a + (Number(s.paidKaspi) || 0), 0);
+    const moveSum = mv.reduce((a, m) => a + m.amount, 0);
+    const cashNow = (sh.opening || 0) + moveSum;
+    const done = ss.filter(s => s.status === "DONE" && s.startedAt < nextOpen);
+    const income = done.reduce((a, s) => a + (Number(s.paidCash) || 0), 0);
+    const kaspi = done.reduce((a, s) => a + (Number(s.paidKaspi) || 0), 0);
     const box = (label, val, cls = "") => `<div class="stat ${cls}"><small>${label}</small><b>${val}</b></div>`;
     $("cashStats").innerHTML =
       box("Наличных в кассе" + (sh.closedAt ? " на закрытие" : " сейчас"), fmtMoney(cashNow) + " ₸", "main") +
       box("Остаток на начало смены", fmtMoney(sh.opening) + " ₸") +
       box("Принято наличными", fmtMoney(income) + " ₸") +
       box("Выдано из кассы (авансы)", fmtMoney(Math.abs(out)) + " ₸") +
-      box("Принято по Kaspi", fmtMoney(kaspi) + " ₸");
+      box("Принято по Kaspi", fmtMoney(kaspi) + " ₸") +
+      box("Выручка за смену", fmtMoney(income + kaspi) + " ₸");
     const list = [...mv].sort((a, b) => b.at - a.at);
     $("emptyM").classList.toggle("hidden", list.length > 0);
     $("rowsM").innerHTML = list.map(m => `<tr>
