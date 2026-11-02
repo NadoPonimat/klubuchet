@@ -12,9 +12,9 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   .hidden{display:none!important}
-  button,input{font:inherit}
-  input{width:100%;padding:11px 12px;border-radius:8px;border:1px solid var(--line);background:#0f1115;color:var(--text)}
-  input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  button,input,select{font:inherit}
+  input,select{width:100%;padding:11px 12px;border-radius:8px;border:1px solid var(--line);background:#0f1115;color:var(--text)}
+  input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   button{cursor:pointer;border:0;border-radius:8px;padding:11px 16px;background:var(--accent);color:#1a1405;font-weight:600}
   button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 12px;font-weight:500}
 
@@ -29,18 +29,31 @@
   header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
   header b{font-size:17px}
   header span{color:var(--muted);margin-right:12px;font-size:14px}
+  nav{display:flex;gap:6px;padding:12px 20px 0;max-width:1100px;margin:0 auto}
+  nav button{background:transparent;color:var(--muted);border:1px solid var(--line);padding:8px 16px;font-weight:500}
+  nav button.on{background:var(--accent);color:#1a1405;border-color:var(--accent);font-weight:600}
   main{padding:20px;max-width:1100px;margin:0 auto}
   h2{margin:0 0 14px;font-size:18px}
   .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
-  table{width:100%;border-collapse:collapse;min-width:760px}
+  table{width:100%;border-collapse:collapse;min-width:640px}
   th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
   th{color:var(--muted);font-weight:500;font-size:13px}
   tr:last-child td{border-bottom:0}
   td.num,th.num{text-align:right}
+  .neg{color:var(--err)}
   .tag{padding:2px 9px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
   .tag.run{color:var(--accent);border-color:var(--accent)}
   .tag.done{color:var(--ok);border-color:var(--ok)}
+  .tag.bad{color:var(--muted)}
   .empty{padding:30px;text-align:center;color:var(--muted)}
+
+  .pick{max-width:420px;margin-bottom:18px}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:22px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .stat small{display:block;color:var(--muted);font-size:13px;margin-bottom:4px}
+  .stat b{font-size:22px}
+  .stat.main{border-color:var(--accent)}
+  .note{color:var(--muted);font-size:13px;margin:-8px 0 18px}
 </style>
 </head>
 <body>
@@ -63,17 +76,56 @@
     <b>Клубучёт</b>
     <div><span id="who"></span><button class="ghost" id="logoutBtn">Выйти</button></div>
   </header>
+  <nav id="tabs">
+    <button data-tab="sessions" class="on">Сессии</button>
+    <button data-tab="cash">Касса</button>
+    <button data-tab="advances">Авансы</button>
+  </nav>
   <main>
-    <h2>Последние сессии</h2>
-    <div class="tablewrap">
-      <table>
-        <thead><tr>
-          <th>Начало</th><th>Тип</th><th>Устройство</th><th>Клиент</th>
-          <th class="num">Минут</th><th class="num">Сумма, ₸</th><th>Оплата</th><th>Принял</th><th>Статус</th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-      <div class="empty hidden" id="empty">Сессий пока нет</div>
+    <!-- Сессии -->
+    <div id="v-sessions">
+      <h2>Последние сессии</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th>Начало</th><th>Тип</th><th>Устройство</th><th>Клиент</th>
+            <th class="num">Минут</th><th class="num">Сумма, ₸</th><th>Оплата</th><th>Принял</th><th>Статус</th>
+          </tr></thead>
+          <tbody id="rowsS"></tbody>
+        </table>
+        <div class="empty hidden" id="emptyS">Сессий пока нет</div>
+      </div>
+    </div>
+
+    <!-- Касса -->
+    <div id="v-cash" class="hidden">
+      <h2>Касса за смену</h2>
+      <div class="pick">
+        <label for="shiftPick" style="margin-top:0">Смена</label>
+        <select id="shiftPick"></select>
+      </div>
+      <div class="stats" id="cashStats"></div>
+      <p class="note">Kaspi считается по сессиям со статусом «Завершена», начатым в рамках смены.</p>
+      <h2>Движения по кассе</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Время</th><th>Вид</th><th>Комментарий</th><th>Кто</th><th class="num">Сумма, ₸</th></tr></thead>
+          <tbody id="rowsM"></tbody>
+        </table>
+        <div class="empty hidden" id="emptyM">Движений за эту смену нет</div>
+      </div>
+    </div>
+
+    <!-- Авансы -->
+    <div id="v-advances" class="hidden">
+      <h2>Авансы сотрудникам</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Дата</th><th>Сотрудник</th><th class="num">Сумма, ₸</th><th>Откуда</th><th>Выдал</th><th>Возврат</th><th>Комментарий</th></tr></thead>
+          <tbody id="rowsA"></tbody>
+        </table>
+        <div class="empty hidden" id="emptyA">Авансов пока нет</div>
+      </div>
     </div>
   </main>
 </section>
@@ -82,7 +134,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { getFirestore, collection, query, orderBy, limit, onSnapshot }
+import { getFirestore, collection, query, where, orderBy, limit, onSnapshot }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const app = initializeApp({
@@ -102,10 +154,15 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmtDate = ms => ms ? new Date(ms).toLocaleString("ru-RU",
   {day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "—";
+const fmtDay = ms => ms ? new Date(ms).toLocaleDateString("ru-RU",
+  {day:"2-digit",month:"2-digit",year:"numeric"}) : "—";
 const fmtMoney = n => Number(n || 0).toLocaleString("ru-RU");
 const PAY = { CASH:"Наличные", KASPI:"Kaspi", MIXED:"Смешанная" };
-const STATUS = { DONE:["Завершена","done"], ACTIVE:["Идёт","run"], RUNNING:["Идёт","run"] };
+const STATUS = { DONE:["Завершена","done"], ACTIVE:["Идёт","run"], RUNNING:["Идёт","run"], CANCELLED:["Отменена","bad"] };
+const MOVE = { SESSION:"Оплата сессии", ADVANCE:"Аванс" };
+const SRC = { CASH:"Из кассы", TRANSFER:"Перевод от владельца" };
 
+/* ---------- вход ---------- */
 async function doLogin(){
   $("err").textContent = "";
   const login = $("lg").value.trim().toLowerCase();
@@ -122,17 +179,37 @@ $("loginBtn").onclick = doLogin;
 $("pw").addEventListener("keydown", e => { if(e.key === "Enter") doLogin(); });
 $("logoutBtn").onclick = () => signOut(auth);
 
-let unsub = null;
+/* ---------- вкладки ---------- */
+let subs = [];
+const clearSubs = () => { subs.forEach(f => f()); subs = []; };
+const VIEWS = { sessions: viewSessions, cash: viewCash, advances: viewAdvances };
+
+function show(tab){
+  clearSubs();
+  for(const t of Object.keys(VIEWS)) $("v-" + t).classList.toggle("hidden", t !== tab);
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  VIEWS[tab]();
+}
+$("tabs").addEventListener("click", e => { const t = e.target.dataset.tab; if(t) show(t); });
+
 onAuthStateChanged(auth, user => {
-  if(unsub){ unsub(); unsub = null; }
+  clearSubs();
   $("login").classList.toggle("hidden", !!user);
   $("app").classList.toggle("hidden", !user);
   if(!user) return;
   $("who").textContent = (user.email || "").replace(EMAIL_DOMAIN, "");
+  show("sessions");
+});
+
+const onErr = box => err => { box.textContent = "Не удалось загрузить: " + err.code; box.classList.remove("hidden"); };
+
+/* ---------- Сессии ---------- */
+function viewSessions(){
   const q = query(collection(db, "sessions"), orderBy("startedAt", "desc"), limit(100));
-  unsub = onSnapshot(q, snap => {
-    $("empty").classList.toggle("hidden", !snap.empty);
-    $("rows").innerHTML = snap.docs.map(d => {
+  subs.push(onSnapshot(q, snap => {
+    $("emptyS").textContent = "Сессий пока нет";
+    $("emptyS").classList.toggle("hidden", !snap.empty);
+    $("rowsS").innerHTML = snap.docs.map(d => {
       const s = d.data();
       const st = STATUS[s.status] || [s.status || "—", ""];
       const device = s.kind === "PS" ? "PS №" + (s.psNumber ?? "") : (s.title || "VR");
@@ -148,8 +225,84 @@ onAuthStateChanged(auth, user => {
         <td><span class="tag ${st[1]}">${esc(st[0])}</span></td>
       </tr>`;
     }).join("");
-  }, err => { $("empty").textContent = "Не удалось загрузить: " + err.code; $("empty").classList.remove("hidden"); });
-});
+  }, onErr($("emptyS"))));
+}
+
+/* ---------- Касса ---------- */
+function viewCash(){
+  let shifts = [], selected = null, mv = [], ss = [], inner = [];
+  const stopInner = () => { inner.forEach(f => f()); inner = []; };
+  subs.push(stopInner);
+
+  function render(){
+    const sh = shifts.find(s => String(s.dateEpochDay) === String(selected));
+    if(!sh){ $("cashStats").innerHTML = ""; $("rowsM").innerHTML = ""; return; }
+    const end = sh.closedAt || Date.now();
+    const income = mv.filter(m => m.amount > 0).reduce((a, m) => a + m.amount, 0);
+    const out = mv.filter(m => m.amount < 0).reduce((a, m) => a + m.amount, 0);
+    const cashNow = (sh.opening || 0) + income + out;
+    const kaspi = ss.filter(s => s.status === "DONE" && s.startedAt <= end)
+                    .reduce((a, s) => a + (Number(s.paidKaspi) || 0), 0);
+    const box = (label, val, cls = "") => `<div class="stat ${cls}"><small>${label}</small><b>${val}</b></div>`;
+    $("cashStats").innerHTML =
+      box("Наличных в кассе" + (sh.closedAt ? " на закрытие" : " сейчас"), fmtMoney(cashNow) + " ₸", "main") +
+      box("Остаток на начало смены", fmtMoney(sh.opening) + " ₸") +
+      box("Принято наличными", fmtMoney(income) + " ₸") +
+      box("Выдано из кассы (авансы)", fmtMoney(Math.abs(out)) + " ₸") +
+      box("Принято по Kaspi", fmtMoney(kaspi) + " ₸");
+    const list = [...mv].sort((a, b) => b.at - a.at);
+    $("emptyM").classList.toggle("hidden", list.length > 0);
+    $("rowsM").innerHTML = list.map(m => `<tr>
+      <td>${fmtDate(m.at)}</td>
+      <td>${esc(MOVE[m.type] || m.type)}</td>
+      <td>${esc(m.comment) || "—"}</td>
+      <td>${esc(m.byName)}</td>
+      <td class="num ${m.amount < 0 ? "neg" : ""}">${fmtMoney(m.amount)}</td>
+    </tr>`).join("");
+  }
+
+  function load(){
+    stopInner(); mv = []; ss = [];
+    const sh = shifts.find(s => String(s.dateEpochDay) === String(selected));
+    if(!sh){ render(); return; }
+    inner.push(onSnapshot(query(collection(db, "cash_movements"), where("shiftDay", "==", Number(sh.dateEpochDay))),
+      snap => { mv = snap.docs.map(d => d.data()); render(); }, onErr($("emptyM"))));
+    inner.push(onSnapshot(query(collection(db, "sessions"), where("startedAt", ">=", sh.openedAt), orderBy("startedAt", "desc")),
+      snap => { ss = snap.docs.map(d => d.data()); render(); }, onErr($("emptyM"))));
+  }
+
+  $("shiftPick").onchange = e => { selected = e.target.value; load(); };
+
+  subs.push(onSnapshot(query(collection(db, "cash_shifts"), orderBy("dateEpochDay", "desc"), limit(60)), snap => {
+    shifts = snap.docs.map(d => d.data());
+    $("shiftPick").innerHTML = shifts.map(s =>
+      `<option value="${esc(s.dateEpochDay)}">${fmtDay(s.openedAt)}, открыл ${esc(s.openedByName)}${s.closedAt ? "" : " (идёт)"}</option>`).join("");
+    if(!shifts.some(s => String(s.dateEpochDay) === String(selected))) selected = shifts[0]?.dateEpochDay;
+    $("shiftPick").value = selected;
+    load();
+  }, onErr($("emptyM"))));
+}
+
+/* ---------- Авансы ---------- */
+function viewAdvances(){
+  const q = query(collection(db, "advances"), orderBy("at", "desc"), limit(100));
+  subs.push(onSnapshot(q, snap => {
+    $("emptyA").textContent = "Авансов пока нет";
+    $("emptyA").classList.toggle("hidden", !snap.empty);
+    $("rowsA").innerHTML = snap.docs.map(d => {
+      const a = d.data();
+      return `<tr>
+        <td>${fmtDate(a.at)}</td>
+        <td>${esc(a.employeeName)}</td>
+        <td class="num">${fmtMoney(a.amount)}</td>
+        <td>${esc(SRC[a.source] || a.source)}</td>
+        <td>${esc(a.byName)}</td>
+        <td>${a.repaidAt ? "Возвращён " + fmtDate(a.repaidAt) : "—"}</td>
+        <td>${esc(a.comment) || "—"}</td>
+      </tr>`;
+    }).join("");
+  }, onErr($("emptyA"))));
+}
 </script>
 </body>
 </html>
