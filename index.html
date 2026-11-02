@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Клубучёт</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#181b22; --line:#272b35; --text:#e8eaf0; --muted:#8b92a3;
+    --accent:#e0a030; --ok:#5fb98a; --err:#e5645a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .hidden{display:none!important}
+  button,input{font:inherit}
+  input{width:100%;padding:11px 12px;border-radius:8px;border:1px solid var(--line);background:#0f1115;color:var(--text)}
+  input:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  button{cursor:pointer;border:0;border-radius:8px;padding:11px 16px;background:var(--accent);color:#1a1405;font-weight:600}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);padding:7px 12px;font-weight:500}
+
+  #login{min-height:100vh;display:grid;place-items:center;padding:20px}
+  .card{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px}
+  .card h1{margin:0 0 4px;font-size:22px}
+  .card p{margin:0 0 20px;color:var(--muted)}
+  label{display:block;margin:14px 0 6px;color:var(--muted);font-size:13px}
+  #loginBtn{width:100%;margin-top:20px}
+  .error{color:var(--err);margin-top:12px;min-height:1.4em;font-size:14px}
+
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header b{font-size:17px}
+  header span{color:var(--muted);margin-right:12px;font-size:14px}
+  main{padding:20px;max-width:1100px;margin:0 auto}
+  h2{margin:0 0 14px;font-size:18px}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  table{width:100%;border-collapse:collapse;min-width:760px}
+  th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:13px}
+  tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right}
+  .tag{padding:2px 9px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+  .tag.run{color:var(--accent);border-color:var(--accent)}
+  .tag.done{color:var(--ok);border-color:var(--ok)}
+  .empty{padding:30px;text-align:center;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<section id="login">
+  <div class="card">
+    <h1>Клубучёт</h1>
+    <p>Войдите под своим логином из приложения</p>
+    <label for="lg">Логин</label>
+    <input id="lg" autocomplete="username" autocapitalize="none">
+    <label for="pw">Пароль</label>
+    <input id="pw" type="password" autocomplete="current-password">
+    <button id="loginBtn">Войти</button>
+    <div class="error" id="err"></div>
+  </div>
+</section>
+
+<section id="app" class="hidden">
+  <header>
+    <b>Клубучёт</b>
+    <div><span id="who"></span><button class="ghost" id="logoutBtn">Выйти</button></div>
+  </header>
+  <main>
+    <h2>Последние сессии</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Начало</th><th>Тип</th><th>Устройство</th><th>Клиент</th>
+          <th class="num">Минут</th><th class="num">Сумма, ₸</th><th>Оплата</th><th>Принял</th><th>Статус</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty hidden" id="empty">Сессий пока нет</div>
+    </div>
+  </main>
+</section>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { getFirestore, collection, query, orderBy, limit, onSnapshot }
+  from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const app = initializeApp({
+  apiKey: "AIzaSyBDHBdEzPnrkme8SL_qSV3rHDvnwTVPuu0",
+  authDomain: "klubuchet.firebaseapp.com",
+  projectId: "klubuchet",
+  storageBucket: "klubuchet.firebasestorage.app",
+  messagingSenderId: "1059052188818",
+  appId: "1:1059052188818:web:324c049f139c609a3f624b"
+});
+const auth = getAuth(app);
+const db = getFirestore(app);
+const $ = id => document.getElementById(id);
+const EMAIL_DOMAIN = "@klubuchet.app";
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtDate = ms => ms ? new Date(ms).toLocaleString("ru-RU",
+  {day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : "—";
+const fmtMoney = n => Number(n || 0).toLocaleString("ru-RU");
+const PAY = { CASH:"Наличные", KASPI:"Kaspi", MIXED:"Смешанная" };
+const STATUS = { DONE:["Завершена","done"], ACTIVE:["Идёт","run"], RUNNING:["Идёт","run"] };
+
+async function doLogin(){
+  $("err").textContent = "";
+  const login = $("lg").value.trim().toLowerCase();
+  if(!login || !$("pw").value){ $("err").textContent = "Введите логин и пароль"; return; }
+  $("loginBtn").disabled = true;
+  try{
+    await signInWithEmailAndPassword(auth, login + EMAIL_DOMAIN, $("pw").value);
+  }catch(e){
+    $("err").textContent = (e.code === "auth/invalid-credential" || e.code === "auth/wrong-password" || e.code === "auth/user-not-found")
+      ? "Неверный логин или пароль" : "Ошибка входа: " + (e.code || e.message);
+  }finally{ $("loginBtn").disabled = false; }
+}
+$("loginBtn").onclick = doLogin;
+$("pw").addEventListener("keydown", e => { if(e.key === "Enter") doLogin(); });
+$("logoutBtn").onclick = () => signOut(auth);
+
+let unsub = null;
+onAuthStateChanged(auth, user => {
+  if(unsub){ unsub(); unsub = null; }
+  $("login").classList.toggle("hidden", !!user);
+  $("app").classList.toggle("hidden", !user);
+  if(!user) return;
+  $("who").textContent = (user.email || "").replace(EMAIL_DOMAIN, "");
+  const q = query(collection(db, "sessions"), orderBy("startedAt", "desc"), limit(100));
+  unsub = onSnapshot(q, snap => {
+    $("empty").classList.toggle("hidden", !snap.empty);
+    $("rows").innerHTML = snap.docs.map(d => {
+      const s = d.data();
+      const st = STATUS[s.status] || [s.status || "—", ""];
+      const device = s.kind === "PS" ? "PS №" + (s.psNumber ?? "") : (s.title || "VR");
+      return `<tr>
+        <td>${fmtDate(s.startedAt)}</td>
+        <td>${esc(s.kind)}</td>
+        <td>${esc(device)}</td>
+        <td>${esc(s.clientName) || "—"}</td>
+        <td class="num">${esc(s.durationMin)}</td>
+        <td class="num">${fmtMoney(s.price)}</td>
+        <td>${esc(PAY[s.payMethod] || s.payMethod)}</td>
+        <td>${esc(s.createdByName)}</td>
+        <td><span class="tag ${st[1]}">${esc(st[0])}</span></td>
+      </tr>`;
+    }).join("");
+  }, err => { $("empty").textContent = "Не удалось загрузить: " + err.code; $("empty").classList.remove("hidden"); });
+});
+</script>
+</body>
+</html>
