@@ -54,9 +54,21 @@
   .stat b{font-size:22px}
   .stat.main{border-color:var(--accent)}
   .note{color:var(--muted);font-size:13px;margin:-8px 0 18px}
+
+  #alertBar{position:sticky;top:0;z-index:10;background:var(--err);color:#fff;text-align:center;padding:12px 16px;font-weight:600}
+  .startcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:24px}
+  .startcard h2{margin-bottom:6px}
+  .formgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0 14px}
+  .startrow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px;flex-wrap:wrap}
+  .act{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:10px}
+  .act small{display:block;color:var(--muted)}
+  .act .timer{font-size:20px;font-variant-numeric:tabular-nums}
+  .act.over{border-color:var(--err)}
+  .act.over .timer{color:var(--err);font-weight:700}
 </style>
 </head>
 <body>
+<div id="alertBar" class="hidden"></div>
 
 <section id="login">
   <div class="card">
@@ -86,6 +98,29 @@
   <main>
     <!-- Сессии -->
     <div id="v-sessions">
+      <div class="startcard">
+        <h2>Новая сессия</h2>
+        <div class="formgrid">
+          <div><label for="stKind">Тип</label>
+            <select id="stKind"><option value="PS">PlayStation</option><option value="VR">VR</option></select></div>
+          <div id="stPsBox"><label for="stPs">Номер PS</label>
+            <input id="stPs" type="number" min="1" value="1"></div>
+          <div><label for="stPack" id="stPackLbl">Пакет</label><select id="stPack"></select></div>
+          <div><label for="stClient">Клиент (необязательно)</label><input id="stClient"></div>
+          <div><label for="stPay">Оплата</label>
+            <select id="stPay"><option value="CASH">Наличные</option><option value="KASPI">Kaspi</option><option value="MIXED">Смешанная</option></select></div>
+          <div id="stCashBox" class="hidden"><label for="stCash">Из них наличными, ₸</label><input id="stCash" type="number" min="0"></div>
+        </div>
+        <div class="startrow"><b id="stSummary"></b><button id="stGo">Запустить</button></div>
+        <div class="error" id="stErr"></div>
+        <div class="note" id="shiftWarn" style="margin:6px 0 0"></div>
+        <button class="ghost" id="notifBtn" style="margin-top:10px">Включить уведомления браузера</button>
+      </div>
+
+      <h2>Идут сейчас</h2>
+      <div id="activeList"></div>
+      <div class="empty hidden" id="emptyAct" style="margin-bottom:20px">Активных сессий нет</div>
+
       <h2>Последние сессии</h2>
       <div class="tablewrap">
         <table>
@@ -167,7 +202,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { getFirestore, collection, query, where, orderBy, limit, onSnapshot, getDocs }
+import { getFirestore, collection, query, where, orderBy, limit, onSnapshot, getDocs, doc, writeBatch, updateDoc }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const app = initializeApp({
@@ -227,20 +262,200 @@ $("tabs").addEventListener("click", e => { const t = e.target.dataset.tab; if(t)
 
 onAuthStateChanged(auth, user => {
   clearSubs();
+  stopGlobal();
   $("login").classList.toggle("hidden", !!user);
   $("app").classList.toggle("hidden", !user);
   if(!user) return;
   $("who").textContent = (user.email || "").replace(EMAIL_DOMAIN, "");
   $("tabStaff").classList.add("hidden");
+  me = { login: (user.email || "").replace(EMAIL_DOMAIN, ""), name: (user.email || "").replace(EMAIL_DOMAIN, "") };
   show("sessions");
+  startGlobal();
   getDocs(query(collection(db, "users"), where("authUid", "==", user.uid), limit(1)))
     .then(snap => {
+      if(snap.docs[0]?.data().name) me.name = snap.docs[0].data().name;
       const role = snap.docs[0]?.data().role;
       if(role && role !== "EMPLOYEE") $("tabStaff").classList.remove("hidden");
     }).catch(() => {});
 });
 
 const onErr = box => err => { box.textContent = "Не удалось загрузить: " + err.code; box.classList.remove("hidden"); };
+
+/* ---------- Глобально: активные сессии, тарифы, смена, уведомления ---------- */
+let me = { login: "", name: "" };
+let psPacks = [], vrGames = [], lastShift = null, active = [], curList = [];
+let globalSubs = [], tickId = null, firstActive = true;
+const alerted = new Set();
+let audioCtx = null;
+
+document.addEventListener("click", () => {
+  if(!audioCtx){ try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){} }
+  if(audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+});
+
+function beep(){
+  if(!audioCtx) return;
+  [0, 0.4, 0.8].forEach(t => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), at = audioCtx.currentTime + t;
+    o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.4, at + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.3);
+    o.start(at); o.stop(at + 0.32);
+  });
+}
+function notify(title, body){
+  if("Notification" in window && Notification.permission === "granted"){
+    try{ new Notification(title, { body }); }catch(e){}
+  }
+}
+function updateNotifBtn(){
+  const ok = !("Notification" in window) || Notification.permission === "granted";
+  $("notifBtn").classList.toggle("hidden", ok);
+}
+$("notifBtn").onclick = () => Notification.requestPermission().then(updateNotifBtn);
+
+const fmtLeft = ms => {
+  const a = Math.abs(ms), m = Math.floor(a / 60000), s = Math.floor(a / 1000) % 60;
+  return (ms < 0 ? "+" : "") + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+};
+
+function renderActive(){
+  $("emptyAct").classList.toggle("hidden", active.length > 0);
+  $("activeList").innerHTML = [...active].sort((a, b) => a.plannedEndAt - b.plannedEndAt).map(s => `
+    <div class="act" data-card="${esc(s.uid)}">
+      <div><b>${esc(s.title)}</b><small>${esc(s.createdByName)}${s.clientName ? " · " + esc(s.clientName) : ""}</small></div>
+      <div class="timer" data-timer="${esc(s.uid)}"></div>
+      <button class="ghost" data-finish="${esc(s.uid)}">Завершить</button>
+    </div>`).join("");
+  updateTimers();
+}
+function updateTimers(){
+  const now = Date.now();
+  for(const s of active){
+    const left = s.plannedEndAt - now;
+    const el = document.querySelector(`[data-timer="${s.uid}"]`);
+    if(!el) continue;
+    el.textContent = (left <= 0 ? "Время вышло " : "Осталось ") + fmtLeft(left);
+    el.parentElement.classList.toggle("over", left <= 0);
+  }
+}
+$("activeList").addEventListener("click", async e => {
+  const uid = e.target.dataset.finish;
+  if(!uid || !confirm("Завершить сессию?")) return;
+  const now = Date.now();
+  try{ await updateDoc(doc(db, "sessions", uid), { status: "DONE", endedAt: now, updatedAt: now }); }
+  catch(err){ alert("Не удалось завершить: " + (err.code || err.message)); }
+});
+
+function tick(){
+  const now = Date.now(), overdue = [];
+  for(const s of active){
+    if(s.plannedEndAt - now <= 0){
+      overdue.push(s);
+      if(!alerted.has(s.uid)){ alerted.add(s.uid); beep(); notify("Время вышло", s.title); }
+    }
+  }
+  $("alertBar").classList.toggle("hidden", overdue.length === 0);
+  $("alertBar").textContent = overdue.length ? "Время вышло: " + overdue.map(s => s.title).join(", ") : "";
+  document.title = overdue.length ? "⏰ Время вышло — Клубучёт" : "Клубучёт";
+  updateTimers();
+}
+
+function startGlobal(){
+  stopGlobal();
+  firstActive = true;
+  updateNotifBtn();
+  globalSubs.push(onSnapshot(query(collection(db, "sessions"), where("status", "==", "ACTIVE")), snap => {
+    active = snap.docs.map(d => d.data());
+    if(firstActive){
+      firstActive = false;
+      active.forEach(s => { if(s.plannedEndAt - Date.now() < -60000) alerted.add(s.uid); });
+    }
+    renderActive();
+  }));
+  globalSubs.push(onSnapshot(collection(db, "ps_packages"), snap => { psPacks = snap.docs.map(d => d.data()); fillPacks(); }));
+  globalSubs.push(onSnapshot(collection(db, "vr_games"), snap => { vrGames = snap.docs.map(d => d.data()); fillPacks(); }));
+  globalSubs.push(onSnapshot(query(collection(db, "cash_shifts"), orderBy("dateEpochDay", "desc"), limit(1)), snap => {
+    lastShift = snap.docs[0]?.data() || null;
+    $("shiftWarn").textContent = !lastShift ? "Кассовая смена не найдена. Откройте смену в приложении."
+      : lastShift.closedAt ? "Последняя кассовая смена закрыта. Оплата запишется в неё." : "";
+  }));
+  tickId = setInterval(tick, 1000);
+}
+function stopGlobal(){
+  globalSubs.forEach(f => f()); globalSubs = [];
+  if(tickId){ clearInterval(tickId); tickId = null; }
+  active = []; alerted.clear();
+  $("alertBar").classList.add("hidden");
+  document.title = "Клубучёт";
+}
+
+/* ---------- Форма новой сессии ---------- */
+function fillPacks(){
+  const ps = $("stKind").value === "PS";
+  curList = (ps ? psPacks : vrGames).filter(x => x.active !== false)
+    .sort((a, b) => ps ? (a.durationMin || 0) - (b.durationMin || 0) : (a.number || 0) - (b.number || 0));
+  $("stPsBox").classList.toggle("hidden", !ps);
+  $("stPackLbl").textContent = ps ? "Пакет" : "Игра";
+  $("stPack").innerHTML = curList.map((x, i) =>
+    `<option value="${i}">${esc(x.title)} — ${esc(x.durationMin)} мин, ${fmtMoney(x.price)} ₸</option>`).join("");
+  updateSummary();
+}
+function updateSummary(){
+  const it = curList[$("stPack").value];
+  $("stSummary").textContent = it ? "К оплате: " + fmtMoney(it.price) + " ₸" : "";
+  $("stCashBox").classList.toggle("hidden", $("stPay").value !== "MIXED");
+}
+$("stKind").onchange = fillPacks;
+$("stPack").onchange = updateSummary;
+$("stPay").onchange = updateSummary;
+
+$("stGo").onclick = async () => {
+  const err = m => { $("stErr").textContent = m; };
+  err("");
+  const kind = $("stKind").value, item = curList[$("stPack").value];
+  if(!item) return err("Выберите пакет или игру");
+  let psNumber = 0;
+  if(kind === "PS"){
+    psNumber = Number($("stPs").value);
+    if(!(psNumber >= 1)) return err("Укажите номер PS");
+    if(active.some(s => s.kind === "PS" && s.psNumber === psNumber)) return err("PS №" + psNumber + " уже занята");
+  }
+  const payMethod = $("stPay").value, price = Number(item.price) || 0;
+  let paidCash = 0, paidKaspi = 0;
+  if(payMethod === "CASH") paidCash = price;
+  else if(payMethod === "KASPI") paidKaspi = price;
+  else{
+    paidCash = Number($("stCash").value) || 0;
+    if(paidCash <= 0 || paidCash >= price) return err("Для смешанной оплаты наличная часть должна быть больше 0 и меньше суммы");
+    paidKaspi = price - paidCash;
+  }
+  const now = Date.now(), uid = crypto.randomUUID(), dur = Number(item.durationMin) || 0;
+  const title = kind === "PS" ? "PS" + psNumber + " · " + item.title : item.title;
+  const shiftDay = lastShift ? Number(lastShift.dateEpochDay) : Math.floor(now / 86400000);
+  $("stGo").disabled = true;
+  try{
+    const batch = writeBatch(db);
+    batch.set(doc(db, "sessions", uid), {
+      clientName: $("stClient").value.trim(), createdByLogin: me.login, createdByName: me.name,
+      durationMin: dur, endedAt: null, kind, note: "", paid: price, paidCash, paidKaspi, payMethod,
+      plannedEndAt: now + dur * 60000, price, psNumber, startedAt: now, status: "ACTIVE", title, uid, updatedAt: now
+    });
+    if(paidCash > 0){
+      const mid = crypto.randomUUID();
+      batch.set(doc(db, "cash_movements", mid), {
+        amount: paidCash, at: now, byLogin: me.login, byName: me.name,
+        comment: "Старт сессии: " + title + (payMethod === "MIXED" ? " — наличная часть" : ""),
+        shiftDay, type: "SESSION", uid: mid, updatedAt: now
+      });
+    }
+    await batch.commit();
+    $("stClient").value = ""; $("stCash").value = "";
+  }catch(e){
+    err("Не удалось запустить: " + (e.code || e.message));
+  }finally{ $("stGo").disabled = false; }
+};
 
 /* ---------- Сессии ---------- */
 function viewSessions(){
