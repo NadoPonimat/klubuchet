@@ -80,6 +80,7 @@
     <button data-tab="sessions" class="on">Сессии</button>
     <button data-tab="cash">Касса</button>
     <button data-tab="advances">Авансы</button>
+    <button data-tab="tariffs">Тарифы</button>
     <button data-tab="staff" id="tabStaff" class="hidden">Сотрудники</button>
   </nav>
   <main>
@@ -128,6 +129,26 @@
         <div class="empty hidden" id="emptyA">Авансов пока нет</div>
       </div>
     </div>
+    <!-- Тарифы -->
+    <div id="v-tariffs" class="hidden">
+      <h2>Пакеты PlayStation</h2>
+      <div class="tablewrap" style="margin-bottom:26px">
+        <table style="min-width:420px">
+          <thead><tr><th>Название</th><th class="num">Минут</th><th class="num">Цена, ₸</th><th>Статус</th></tr></thead>
+          <tbody id="rowsP"></tbody>
+        </table>
+        <div class="empty hidden" id="emptyP">Пакетов нет</div>
+      </div>
+      <h2>VR-игры</h2>
+      <div class="tablewrap">
+        <table style="min-width:520px">
+          <thead><tr><th>Название</th><th>Возраст</th><th class="num">Минут</th><th class="num">Цена, ₸</th><th>Статус</th></tr></thead>
+          <tbody id="rowsV"></tbody>
+        </table>
+        <div class="empty hidden" id="emptyV">Игр нет</div>
+      </div>
+    </div>
+
     <!-- Сотрудники -->
     <div id="v-staff" class="hidden">
       <h2>Сотрудники</h2>
@@ -194,7 +215,7 @@ $("logoutBtn").onclick = () => signOut(auth);
 /* ---------- вкладки ---------- */
 let subs = [];
 const clearSubs = () => { subs.forEach(f => f()); subs = []; };
-const VIEWS = { sessions: viewSessions, cash: viewCash, advances: viewAdvances, staff: viewStaff };
+const VIEWS = { sessions: viewSessions, cash: viewCash, advances: viewAdvances, tariffs: viewTariffs, staff: viewStaff };
 
 function show(tab){
   clearSubs();
@@ -306,6 +327,30 @@ function viewCash(){
     $("shiftPick").value = selected;
     load();
   }, onErr($("emptyM"))));
+}
+
+/* ---------- Тарифы ---------- */
+function viewTariffs(){
+  const status = on => `<span class="tag ${on ? "done" : "bad"}">${on ? "Активен" : "Выключен"}</span>`;
+  subs.push(onSnapshot(collection(db, "ps_packages"), snap => {
+    $("emptyP").classList.toggle("hidden", !snap.empty);
+    $("rowsP").innerHTML = snap.docs.map(d => d.data()).sort((a, b) => (a.durationMin || 0) - (b.durationMin || 0)).map(p => `<tr>
+      <td>${esc(p.title)}</td>
+      <td class="num">${esc(p.durationMin)}</td>
+      <td class="num">${fmtMoney(p.price)}</td>
+      <td>${status(p.active)}</td>
+    </tr>`).join("");
+  }, onErr($("emptyP"))));
+  subs.push(onSnapshot(collection(db, "vr_games"), snap => {
+    $("emptyV").classList.toggle("hidden", !snap.empty);
+    $("rowsV").innerHTML = snap.docs.map(d => d.data()).sort((a, b) => (a.number || 0) - (b.number || 0)).map(g => `<tr>
+      <td>${esc(g.title)}</td>
+      <td>${esc(g.ageRating) || "—"}</td>
+      <td class="num">${esc(g.durationMin)}</td>
+      <td class="num">${fmtMoney(g.price)}</td>
+      <td>${status(g.active)}</td>
+    </tr>`).join("");
+  }, onErr($("emptyV"))));
 }
 
 /* ---------- Сотрудники ---------- */
