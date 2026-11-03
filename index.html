@@ -80,6 +80,7 @@
     <button data-tab="sessions" class="on">Сессии</button>
     <button data-tab="cash">Касса</button>
     <button data-tab="advances">Авансы</button>
+    <button data-tab="staff" id="tabStaff" class="hidden">Сотрудники</button>
   </nav>
   <main>
     <!-- Сессии -->
@@ -127,6 +128,17 @@
         <div class="empty hidden" id="emptyA">Авансов пока нет</div>
       </div>
     </div>
+    <!-- Сотрудники -->
+    <div id="v-staff" class="hidden">
+      <h2>Сотрудники</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>Статус</th><th class="num">Ставка за смену, ₸</th><th class="num">Бонус, %</th><th class="num">Порог кассы, ₸</th></tr></thead>
+          <tbody id="rowsU"></tbody>
+        </table>
+        <div class="empty hidden" id="emptyU">Сотрудников нет</div>
+      </div>
+    </div>
   </main>
 </section>
 
@@ -134,7 +146,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import { getFirestore, collection, query, where, orderBy, limit, onSnapshot }
+import { getFirestore, collection, query, where, orderBy, limit, onSnapshot, getDocs }
   from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const app = initializeApp({
@@ -182,7 +194,7 @@ $("logoutBtn").onclick = () => signOut(auth);
 /* ---------- вкладки ---------- */
 let subs = [];
 const clearSubs = () => { subs.forEach(f => f()); subs = []; };
-const VIEWS = { sessions: viewSessions, cash: viewCash, advances: viewAdvances };
+const VIEWS = { sessions: viewSessions, cash: viewCash, advances: viewAdvances, staff: viewStaff };
 
 function show(tab){
   clearSubs();
@@ -198,7 +210,13 @@ onAuthStateChanged(auth, user => {
   $("app").classList.toggle("hidden", !user);
   if(!user) return;
   $("who").textContent = (user.email || "").replace(EMAIL_DOMAIN, "");
+  $("tabStaff").classList.add("hidden");
   show("sessions");
+  getDocs(query(collection(db, "users"), where("authUid", "==", user.uid), limit(1)))
+    .then(snap => {
+      const role = snap.docs[0]?.data().role;
+      if(role && role !== "EMPLOYEE") $("tabStaff").classList.remove("hidden");
+    }).catch(() => {});
 });
 
 const onErr = box => err => { box.textContent = "Не удалось загрузить: " + err.code; box.classList.remove("hidden"); };
@@ -288,6 +306,24 @@ function viewCash(){
     $("shiftPick").value = selected;
     load();
   }, onErr($("emptyM"))));
+}
+
+/* ---------- Сотрудники ---------- */
+const ROLE = { EMPLOYEE:"Сотрудник" };
+function viewStaff(){
+  subs.push(onSnapshot(collection(db, "users"), snap => {
+    $("emptyU").textContent = "Сотрудников нет";
+    $("emptyU").classList.toggle("hidden", !snap.empty);
+    $("rowsU").innerHTML = snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => String(a.name).localeCompare(String(b.name))).map(u => `<tr>
+      <td>${esc(u.name)}</td>
+      <td>${esc(u.id)}</td>
+      <td>${esc(ROLE[u.role] || u.role)}</td>
+      <td><span class="tag ${u.active ? "done" : "bad"}">${u.active ? "Работает" : "Отключён"}</span></td>
+      <td class="num">${fmtMoney(u.dailyRate)}</td>
+      <td class="num">${esc(u.cashPercent ?? 0)}</td>
+      <td class="num">${fmtMoney(u.cashThreshold)}</td>
+    </tr>`).join("");
+  }, onErr($("emptyU"))));
 }
 
 /* ---------- Авансы ---------- */
