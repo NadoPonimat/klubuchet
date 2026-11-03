@@ -141,6 +141,11 @@
         <label for="shiftPick" style="margin-top:0">Смена</label>
         <select id="shiftPick"></select>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <button class="ghost" id="expXlsx">Скачать Excel</button>
+        <button class="ghost" id="expPdf">Скачать PDF</button>
+        <button class="ghost" id="expPng">Скачать PNG</button>
+      </div>
       <div class="stats" id="cashStats"></div>
       <p class="note">Выручка, наличные и Kaspi считаются по завершённым сессиям смены, отменённые не входят. Деньги в кассе считаются по движениям.</p>
       <h2>Движения по кассе</h2>
@@ -155,6 +160,16 @@
 
     <!-- Авансы -->
     <div id="v-advances" class="hidden">
+      <div class="startcard">
+        <h2>Выдать аванс из кассы</h2>
+        <div class="formgrid">
+          <div><label for="avEmp">Сотрудник</label><select id="avEmp"></select></div>
+          <div><label for="avSum">Сумма, ₸</label><input id="avSum" type="number" min="1"></div>
+          <div><label for="avNote">Комментарий</label><input id="avNote"></div>
+        </div>
+        <div class="startrow"><span class="note" style="margin:0">Сумма спишется из кассы текущей смены</span><button id="avGo">Выдать аванс</button></div>
+        <div class="error" id="avErr"></div>
+      </div>
       <h2>Авансы сотрудникам</h2>
       <div class="tablewrap">
         <table>
@@ -198,6 +213,10 @@
   </main>
 </section>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<div id="reportBox" style="position:fixed;left:-10000px;top:0"></div>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
@@ -284,7 +303,7 @@ const onErr = box => err => { box.textContent = "Не удалось загру�
 /* ---------- Глобально: активные сессии, тарифы, смена, уведомления ---------- */
 let me = { login: "", name: "" };
 let psPacks = [], vrGames = [], lastShift = null, active = [], curList = [];
-let globalSubs = [], tickId = null, firstActive = true;
+let globalSubs = [], tickId = null, firstActive = true, staff = [], lastReport = null;
 const alerted = new Set();
 let audioCtx = null;
 
@@ -381,6 +400,10 @@ function startGlobal(){
     $("shiftWarn").textContent = !lastShift ? "Кассовая смена не найдена. Откройте смену в приложении."
       : lastShift.closedAt ? "Последняя кассовая смена закрыта. Оплата запишется в неё." : "";
   }));
+  globalSubs.push(onSnapshot(collection(db, "users"), snap => {
+    staff = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    fillEmp();
+  }));
   tickId = setInterval(tick, 1000);
 }
 function stopGlobal(){
@@ -390,6 +413,113 @@ function stopGlobal(){
   $("alertBar").classList.add("hidden");
   document.title = "Клубучёт";
 }
+
+/* ---------- Аванс ---------- */
+function fillEmp(){
+  const self = staff.find(u => u.authUid === auth.currentUser?.uid);
+  const list = (self && self.role === "EMPLOYEE") ? [self] : staff.filter(u => u.active !== false);
+  $("avEmp").innerHTML = list.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join("");
+}
+$("avGo").onclick = async () => {
+  const err = m => { $("avErr").textContent = m; };
+  err("");
+  const emp = staff.find(u => u.id === $("avEmp").value), sum = Number($("avSum").value);
+  if(!emp) return err("Выберите сотрудника");
+  if(!(sum > 0)) return err("Введите сумму аванса");
+  if(!confirm("Выдать аванс " + fmtMoney(sum) + " ₸ — " + emp.name + "? Деньги спишутся из кассы.")) return;
+  const now = Date.now(), aid = crypto.randomUUID(), mid = crypto.randomUUID();
+  const shiftDay = lastShift ? Number(lastShift.dateEpochDay) : Math.floor(now / 86400000);
+  $("avGo").disabled = true;
+  try{
+    const b = writeBatch(db);
+    b.set(doc(db, "advances", aid), {
+      amount: sum, at: now, byName: me.name, comment: $("avNote").value.trim(),
+      employeeLogin: emp.id, employeeName: emp.name, repaidAt: null, repaidToCash: false,
+      source: "CASH", uid: aid, updatedAt: now
+    });
+    b.set(doc(db, "cash_movements", mid), {
+      amount: -sum, at: now, byLogin: me.login, byName: me.name, comment: "Аванс: " + emp.name,
+      shiftDay, type: "ADVANCE", uid: mid, updatedAt: now
+    });
+    await b.commit();
+    $("avSum").value = ""; $("avNote").value = "";
+  }catch(e){
+    err("Не удалось выдать аванс: " + (e.code || e.message));
+  }finally{ $("avGo").disabled = false; }
+};
+
+/* ---------- Выгрузка отчёта ---------- */
+const devName = s => s.kind === "PS" ? "PS №" + (s.psNumber ?? "") : (s.title || "VR");
+function reportHtml(r){
+  const th = "text-align:left;padding:6px 8px;border-bottom:2px solid #999;font-size:12px;color:#444";
+  const td = "padding:6px 8px;border-bottom:1px solid #ddd;font-size:12px";
+  const nm = "text-align:right;white-space:nowrap;";
+  const head = cols => "<tr>" + cols.map(c => `<th style="${th}">${c}</th>`).join("") + "</tr>";
+  const stats = r.stats.map(([k, v]) => `<tr><td style="${td}">${esc(k)}</td><td style="${td + nm}"><b>${fmtMoney(v)} ₸</b></td></tr>`).join("");
+  const mv = r.moves.map(m => `<tr><td style="${td}">${fmtDate(m.at)}</td><td style="${td}">${esc(MOVE[m.type] || m.type)}</td><td style="${td}">${esc(m.comment)}</td><td style="${td}">${esc(m.byName)}</td><td style="${td + nm}">${fmtMoney(m.amount)}</td></tr>`).join("");
+  const ss = r.sessions.map(s => `<tr><td style="${td}">${fmtDate(s.startedAt)}</td><td style="${td}">${esc(devName(s))}</td><td style="${td + nm}">${esc(s.durationMin)}</td><td style="${td + nm}">${fmtMoney(s.price)}</td><td style="${td}">${esc(PAY[s.payMethod] || s.payMethod)}</td><td style="${td}">${esc(s.createdByName)}</td><td style="${td}">${esc((STATUS[s.status] || [s.status])[0])}</td></tr>`).join("");
+  const h2 = "margin:22px 0 6px;font-size:15px";
+  return `<div style="font-family:Arial,sans-serif;color:#111;background:#fff;padding:28px;width:860px">
+    <h1 style="margin:0 0 4px;font-size:22px">${esc(r.title)}</h1>
+    <div style="color:#555;margin-bottom:16px;font-size:13px">${esc(r.subtitle)}</div>
+    <table style="width:100%;border-collapse:collapse">${stats}</table>
+    <h2 style="${h2}">Движения по кассе</h2>
+    <table style="width:100%;border-collapse:collapse">${head(["Время", "Вид", "Комментарий", "Кто", "Сумма, ₸"])}${mv}</table>
+    <h2 style="${h2}">Сессии</h2>
+    <table style="width:100%;border-collapse:collapse">${head(["Начало", "Устройство", "Минут", "Сумма, ₸", "Оплата", "Принял", "Статус"])}${ss}</table>
+  </div>`;
+}
+function download(blob, name){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+async function reportCanvas(){
+  if(!lastReport) throw new Error("Нет данных отчёта");
+  if(typeof html2canvas === "undefined") throw new Error("Библиотека не загрузилась, обновите страницу");
+  $("reportBox").innerHTML = reportHtml(lastReport);
+  return html2canvas($("reportBox").firstElementChild, { backgroundColor: "#ffffff", scale: 2 });
+}
+$("expPng").onclick = async () => {
+  try{
+    const c = await reportCanvas();
+    c.toBlob(b => download(b, lastReport.file + ".png"), "image/png");
+  }catch(e){ alert("Не удалось сделать PNG: " + e.message); }
+};
+$("expPdf").onclick = async () => {
+  try{
+    const c = await reportCanvas();
+    const pdf = new window.jspdf.jsPDF({ unit: "pt", format: "a4" });
+    const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+    const w = pw - 40, h = c.height * w / c.width, img = c.toDataURL("image/png");
+    let left = h, pos = 20;
+    pdf.addImage(img, "PNG", 20, pos, w, h);
+    left -= (ph - 40);
+    while(left > 0){ pos = left - h + 20; pdf.addPage(); pdf.addImage(img, "PNG", 20, pos, w, h); left -= (ph - 40); }
+    pdf.save(lastReport.file + ".pdf");
+  }catch(e){ alert("Не удалось сделать PDF: " + e.message); }
+};
+$("expXlsx").onclick = () => {
+  try{
+    const r = lastReport;
+    if(!r) throw new Error("Нет данных отчёта");
+    if(typeof XLSX === "undefined") throw new Error("Библиотека не загрузилась, обновите страницу");
+    const wb = XLSX.utils.book_new();
+    const w1 = XLSX.utils.aoa_to_sheet([[r.title], [r.subtitle], [], ["Показатель", "Сумма, ₸"], ...r.stats]);
+    w1["!cols"] = [{ wch: 38 }, { wch: 16 }];
+    const w2 = XLSX.utils.aoa_to_sheet([["Время", "Вид", "Комментарий", "Кто", "Сумма, ₸"],
+      ...r.moves.map(m => [fmtDate(m.at), MOVE[m.type] || m.type, m.comment || "", m.byName || "", m.amount])]);
+    w2["!cols"] = [{ wch: 14 }, { wch: 16 }, { wch: 42 }, { wch: 14 }, { wch: 14 }];
+    const w3 = XLSX.utils.aoa_to_sheet([["Начало", "Тип", "Устройство", "Клиент", "Минут", "Сумма, ₸", "Оплата", "Принял", "Статус"],
+      ...r.sessions.map(s => [fmtDate(s.startedAt), s.kind, devName(s), s.clientName || "", s.durationMin, s.price, PAY[s.payMethod] || s.payMethod, s.createdByName || "", (STATUS[s.status] || [s.status])[0]])]);
+    w3["!cols"] = [{ wch: 14 }, { wch: 6 }, { wch: 20 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 12 }];
+    XLSX.utils.book_append_sheet(wb, w1, "Итоги");
+    XLSX.utils.book_append_sheet(wb, w2, "Касса");
+    XLSX.utils.book_append_sheet(wb, w3, "Сессии");
+    XLSX.writeFile(wb, r.file + ".xlsx");
+  }catch(e){ alert("Не удалось сделать Excel: " + e.message); }
+};
 
 /* ---------- Форма новой сессии ---------- */
 function fillPacks(){
@@ -512,6 +642,21 @@ function viewCash(){
       box("Принято по Kaspi", fmtMoney(kaspi) + " ₸") +
       box("Выручка за смену", fmtMoney(income + kaspi) + " ₸");
     const list = [...mv].sort((a, b) => b.at - a.at);
+    lastReport = {
+      title: "Отчёт за смену " + fmtDay(sh.openedAt),
+      subtitle: "Открыл: " + (sh.openedByName || "—") + (sh.closedAt ? ", закрыл: " + (sh.closedByName || "—") : " (смена идёт)"),
+      stats: [
+        ["Наличных в кассе" + (sh.closedAt ? " на закрытие" : " сейчас"), cashNow],
+        ["Остаток на начало смены", sh.opening || 0],
+        ["Принято наличными", income],
+        ["Выдано из кассы (авансы)", Math.abs(out)],
+        ["Принято по Kaspi", kaspi],
+        ["Выручка за смену", income + kaspi]
+      ],
+      moves: [...mv].sort((a, b) => a.at - b.at),
+      sessions: ss.filter(s => s.startedAt < nextOpen).sort((a, b) => a.startedAt - b.startedAt),
+      file: "klubuchet-" + fmtDay(sh.openedAt).replace(/\./g, "-")
+    };
     $("emptyM").classList.toggle("hidden", list.length > 0);
     $("rowsM").innerHTML = list.map(m => `<tr>
       <td>${fmtDate(m.at)}</td>
