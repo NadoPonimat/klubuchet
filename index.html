@@ -136,6 +136,14 @@
 
     <!-- Касса -->
     <div id="v-cash" class="hidden">
+      <div class="startcard">
+        <h2 id="shTitle">Смена</h2>
+        <div class="formgrid">
+          <div><label for="shOpening">Остаток в кассе на начало, ₸</label><input id="shOpening" type="number" min="0"></div>
+        </div>
+        <div class="startrow"><span class="note" id="shInfo" style="margin:0"></span><button id="shGo">Сохранить</button></div>
+        <div class="error" id="shErr"></div>
+      </div>
       <h2>Касса за смену</h2>
       <div class="pick">
         <label for="shiftPick" style="margin-top:0">Смена</label>
@@ -397,6 +405,7 @@ function startGlobal(){
   globalSubs.push(onSnapshot(collection(db, "vr_games"), snap => { vrGames = snap.docs.map(d => d.data()); fillPacks(); }));
   globalSubs.push(onSnapshot(query(collection(db, "cash_shifts"), orderBy("dateEpochDay", "desc"), limit(1)), snap => {
     lastShift = snap.docs[0]?.data() || null;
+    renderShiftCard();
     $("shiftWarn").textContent = !lastShift ? "Кассовая смена не найдена. Откройте смену в приложении."
       : lastShift.closedAt ? "Последняя кассовая смена закрыта. Оплата запишется в неё." : "";
   }));
@@ -413,6 +422,42 @@ function stopGlobal(){
   $("alertBar").classList.add("hidden");
   document.title = "Клубучёт";
 }
+
+/* ---------- Смена: остаток на начало ---------- */
+function renderShiftCard(){
+  const open = lastShift && !lastShift.closedAt;
+  $("shTitle").textContent = open ? "Смена открыта" : "Смена закрыта";
+  $("shInfo").textContent = open
+    ? "Открыл " + (lastShift.openedByName || "—") + ", " + fmtDate(lastShift.openedAt) + ". Остаток на начало сейчас: " + fmtMoney(lastShift.opening) + " ₸"
+    : "Откройте смену и укажите остаток в кассе на начало";
+  $("shGo").textContent = open ? "Сохранить остаток" : "Открыть смену";
+  if(document.activeElement !== $("shOpening")) $("shOpening").value = open ? (lastShift.opening ?? 0) : "";
+}
+$("shGo").onclick = async () => {
+  const err = m => { $("shErr").textContent = m; };
+  err("");
+  const raw = $("shOpening").value, sum = Number(raw);
+  if(raw === "" || !(sum >= 0)) return err("Введите остаток: 0 или больше");
+  const open = lastShift && !lastShift.closedAt, now = Date.now();
+  $("shGo").disabled = true;
+  try{
+    if(open){
+      if(!confirm("Изменить остаток на начало смены на " + fmtMoney(sum) + " ₸?")) return;
+      await updateDoc(doc(db, "cash_shifts", String(lastShift.dateEpochDay)), { opening: sum, updatedAt: now });
+    }else{
+      const day = lastShift ? Number(lastShift.dateEpochDay) + 1 : Math.floor(now / 86400000);
+      if(!confirm("Открыть смену № " + day + " с остатком " + fmtMoney(sum) + " ₸?")) return;
+      const b = writeBatch(db);
+      b.set(doc(db, "cash_shifts", String(day)), {
+        closedAt: null, closedByName: null, dateEpochDay: day, openedAt: now,
+        openedByName: me.name, opening: sum, updatedAt: now
+      });
+      await b.commit();
+    }
+  }catch(e){
+    err("Не удалось сохранить: " + (e.code || e.message));
+  }finally{ $("shGo").disabled = false; }
+};
 
 /* ---------- Аванс ---------- */
 function fillEmp(){
